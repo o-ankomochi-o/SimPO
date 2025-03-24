@@ -1,14 +1,14 @@
 # Model arguments
 model_name_or_path: princeton-nlp/Llama-3-Base-8B-SFT
 torch_dtype: null
-attn_implementation: flash_attention_2
+attn_implementation: eager
 
 # Data training arguments
 dataset_mixer:
   HuggingFaceH4/ultrafeedback_binarized: 1.0
 dataset_splits:
-- train_prefs
-- test_prefs
+  - train_prefs
+  - test_prefs
 preprocessing_num_workers: 12
 
 # SimPOTrainer arguments
@@ -39,7 +39,7 @@ push_to_hub: false
 save_strategy: "steps"
 save_steps: 1000000
 report_to:
-- wandb
+  - wandb
 save_total_limit: 20
 seed: 42
 warmup_ratio: 0.1
