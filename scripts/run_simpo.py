@@ -16,9 +16,14 @@
 import logging
 import random
 import sys
+from dataclasses import dataclass, field
+from typing import Literal, Optional
 
 import torch
 import transformers
+from peft import PeftConfig, PeftModel
+from simpo_config import SimPOConfig
+from simpo_trainer import SimPOTrainer
 from transformers import AutoModelForCausalLM, set_seed
 
 from alignment import (
@@ -34,23 +39,19 @@ from alignment import (
     get_tokenizer,
     is_adapter_model,
 )
-from alignment.data import maybe_insert_system_message, is_openai_format
-from peft import PeftConfig, PeftModel
-from simpo_trainer import SimPOTrainer
-from simpo_config import SimPOConfig
-from dataclasses import dataclass, field
-from typing import Optional, Literal
+from alignment.data import is_openai_format, maybe_insert_system_message
 
 logger = logging.getLogger(__name__)
 
 MISTRAL_CHAT_TEMPLATE = "{% if messages[0]['role'] == 'system' %}{% set loop_messages = messages[1:] %}{% set system_message = messages[0]['content'].strip() + '\n\n' %}{% else %}{% set loop_messages = messages %}{% set system_message = '' %}{% endif %}{% for message in loop_messages %}{% if loop.index0 == 0 %}{% set content = system_message + message['content'] %}{% else %}{% set content = message['content'] %}{% endif %}{% if message['role'] == 'user' %}{{ '[INST] ' + content.strip() + ' [/INST]' }}{% elif message['role'] == 'assistant' %}{{ ' '  + content.strip() + ' ' + eos_token }}{% endif %}{% endfor %}"
+
 
 def apply_chat_template(
     example,
     tokenizer,
     task: Literal["sft", "generation", "rm", "simpo"],
     auto_insert_empty_system_msg: bool = True,
-    change_template = None,
+    change_template=None,
 ):
     if change_template == "mistral":
         tokenizer.chat_template = MISTRAL_CHAT_TEMPLATE
@@ -73,15 +74,21 @@ def apply_chat_template(
                 maybe_insert_system_message(chosen_messages, tokenizer)
                 maybe_insert_system_message(rejected_messages, tokenizer)
 
-            example["text_chosen"] = tokenizer.apply_chat_template(chosen_messages, tokenize=False)
-            example["text_rejected"] = tokenizer.apply_chat_template(rejected_messages, tokenize=False)
+            example["text_chosen"] = tokenizer.apply_chat_template(
+                chosen_messages, tokenize=False
+            )
+            example["text_rejected"] = tokenizer.apply_chat_template(
+                rejected_messages, tokenize=False
+            )
         else:
             raise ValueError(
                 f"Could not format example as dialogue for `rm` task! Require `[chosen, rejected]` keys but found {list(example.keys())}"
             )
     elif task == "simpo":
         if all(k in example.keys() for k in ("chosen", "rejected")):
-            if not is_openai_format(example["chosen"]) or not is_openai_format(example["rejected"]):
+            if not is_openai_format(example["chosen"]) or not is_openai_format(
+                example["rejected"]
+            ):
                 raise ValueError(
                     f"Could not format example as dialogue for `{task}` task! Require OpenAI format for all messages"
                 )
@@ -102,13 +109,23 @@ def apply_chat_template(
             if auto_insert_empty_system_msg:
                 maybe_insert_system_message(prompt_messages, tokenizer)
 
-            example["text_prompt"] = tokenizer.apply_chat_template(prompt_messages, tokenize=False)
-            example["text_chosen"] = tokenizer.apply_chat_template(chosen_messages, tokenize=False)
+            example["text_prompt"] = tokenizer.apply_chat_template(
+                prompt_messages, tokenize=False
+            )
+            example["text_chosen"] = tokenizer.apply_chat_template(
+                chosen_messages, tokenize=False
+            )
             if example["text_chosen"].startswith(tokenizer.bos_token):
-                example["text_chosen"] = example["text_chosen"][len(tokenizer.bos_token):]
-            example["text_rejected"] = tokenizer.apply_chat_template(rejected_messages, tokenize=False)
+                example["text_chosen"] = example["text_chosen"][
+                    len(tokenizer.bos_token) :
+                ]
+            example["text_rejected"] = tokenizer.apply_chat_template(
+                rejected_messages, tokenize=False
+            )
             if example["text_rejected"].startswith(tokenizer.bos_token):
-                example["text_rejected"] = example["text_rejected"][len(tokenizer.bos_token):]
+                example["text_rejected"] = example["text_rejected"][
+                    len(tokenizer.bos_token) :
+                ]
         else:
             raise ValueError(
                 f"Could not format example as dialogue for `{task}` task! Require either the "
@@ -122,8 +139,33 @@ def apply_chat_template(
 
 
 def main():
-    parser = H4ArgumentParser((ModelArguments, DataArguments, SimPOConfig))
-    model_args, data_args, training_args = parser.parse()
+    # parser = H4ArgumentParser((ModelArguments, DataArguments, SimPOConfig))
+    # model_args, data_args, training_args = parser.parse()
+
+    # 修正コード
+    if len(sys.argv) > 1 and sys.argv[1].endswith(".yaml"):
+        # 最初の引数がYAMLファイルの場合
+        yaml_file = sys.argv[1]
+
+        parser = H4ArgumentParser((ModelArguments, DataArguments, SimPOConfig))
+
+        # deepspeedの引数を処理
+        deepspeed_arg = None
+        for i, arg in enumerate(sys.argv):
+            if arg == "--deepspeed" and i + 1 < len(sys.argv):
+                deepspeed_arg = sys.argv[i + 1]
+                break
+
+        # YAMLファイルから設定を読み込む
+        model_args, data_args, training_args = parser.parse_yaml_file(yaml_file)
+
+        # deepspeed設定をTrainingArgsに追加
+        if deepspeed_arg:
+            training_args.deepspeed = deepspeed_arg
+    else:
+        # 通常のコマンドライン引数解析
+        parser = H4ArgumentParser((ModelArguments, DataArguments, SimPOConfig))
+        model_args, data_args, training_args = parser.parse()
 
     #######
     # Setup
@@ -159,7 +201,14 @@ def main():
         data_args,
         splits=data_args.dataset_splits,
         configs=data_args.dataset_configs,
-        columns_to_keep=["messages", "chosen", "rejected", "prompt", "completion", "label"],
+        columns_to_keep=[
+            "messages",
+            "chosen",
+            "rejected",
+            "prompt",
+            "completion",
+            "label",
+        ],
         # seed=training_args.seed,
     )
     logger.info(
@@ -170,7 +219,9 @@ def main():
     #####################################
     # Load tokenizer and process datasets
     #####################################
-    data_args.truncation_side = "left"  # Truncate from left to ensure we don't lose labels in final turn
+    data_args.truncation_side = (
+        "left"  # Truncate from left to ensure we don't lose labels in final turn
+    )
     tokenizer = get_tokenizer(model_args, data_args)
 
     if "mistral" in model_args.model_name_or_path.lower():
@@ -196,17 +247,29 @@ def main():
     # Replace column names with what TRL needs, text_chosen -> chosen and text_rejected -> rejected
     for split in ["train", "test"]:
         raw_datasets[split] = raw_datasets[split].rename_columns(
-            {"text_prompt": "prompt", "text_chosen": "chosen", "text_rejected": "rejected"}
+            {
+                "text_prompt": "prompt",
+                "text_chosen": "chosen",
+                "text_rejected": "rejected",
+            }
         )
 
     # Log a few random samples from the training set:
     for index in random.sample(range(len(raw_datasets["train"])), 3):
-        logger.info(f"Prompt sample {index} of the raw training set:\n\n{raw_datasets['train'][index]['prompt']}")
-        logger.info(f"Chosen sample {index} of the raw training set:\n\n{raw_datasets['train'][index]['chosen']}")
-        logger.info(f"Rejected sample {index} of the raw training set:\n\n{raw_datasets['train'][index]['rejected']}")
+        logger.info(
+            f"Prompt sample {index} of the raw training set:\n\n{raw_datasets['train'][index]['prompt']}"
+        )
+        logger.info(
+            f"Chosen sample {index} of the raw training set:\n\n{raw_datasets['train'][index]['chosen']}"
+        )
+        logger.info(
+            f"Rejected sample {index} of the raw training set:\n\n{raw_datasets['train'][index]['rejected']}"
+        )
 
     torch_dtype = (
-        model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
+        model_args.torch_dtype
+        if model_args.torch_dtype in ["auto", None]
+        else getattr(torch, model_args.torch_dtype)
     )
     quantization_config = get_quantization_config(model_args)
 
