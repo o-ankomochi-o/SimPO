@@ -14,8 +14,7 @@
     "reduce_scatter": true,
     "allgather_bucket_size": 500000000,
     "overlap_comm": true,
-    "contiguous_gradients": true,
-    "zero_keep_fp32_weights": true
+    "contiguous_gradients": true
   },
   "gradient_clipping": 1.0,
   "steps_per_print": 2000,
