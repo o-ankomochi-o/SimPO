@@ -299,6 +299,9 @@ def main():
     # トレーナーのモデルを明示的にGPU（cuda:0）に移動
     trainer.model = trainer.model.to("cuda:0")
 
+    # 不要なGPUキャッシュをクリアする
+    torch.cuda.empty_cache()
+
     ###############
     # Training loop
     ###############
