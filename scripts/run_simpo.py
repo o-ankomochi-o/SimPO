@@ -296,6 +296,9 @@ def main():
         peft_config=get_peft_config(model_args),
     )
 
+    # トレーナーのモデルを明示的にGPU（cuda:0）に移動
+    trainer.model = trainer.model.to("cuda:0")
+
     ###############
     # Training loop
     ###############
