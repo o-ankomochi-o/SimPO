@@ -43,3 +43,4 @@ report_to:
 save_total_limit: 20
 seed: 42
 warmup_ratio: 0.1
+deepspeed: "ds_config.json"

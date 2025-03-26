@@ -139,33 +139,8 @@ def apply_chat_template(
 
 
 def main():
-    # parser = H4ArgumentParser((ModelArguments, DataArguments, SimPOConfig))
-    # model_args, data_args, training_args = parser.parse()
-
-    # 修正コード
-    if len(sys.argv) > 1 and sys.argv[1].endswith(".yaml"):
-        # 最初の引数がYAMLファイルの場合
-        yaml_file = sys.argv[1]
-
-        parser = H4ArgumentParser((ModelArguments, DataArguments, SimPOConfig))
-
-        # deepspeedの引数を処理
-        deepspeed_arg = None
-        for i, arg in enumerate(sys.argv):
-            if arg == "--deepspeed" and i + 1 < len(sys.argv):
-                deepspeed_arg = sys.argv[i + 1]
-                break
-
-        # YAMLファイルから設定を読み込む
-        model_args, data_args, training_args = parser.parse_yaml_file(yaml_file)
-
-        # deepspeed設定をTrainingArgsに追加
-        if deepspeed_arg:
-            training_args.deepspeed = deepspeed_arg
-    else:
-        # 通常のコマンドライン引数解析
-        parser = H4ArgumentParser((ModelArguments, DataArguments, SimPOConfig))
-        model_args, data_args, training_args = parser.parse()
+    parser = H4ArgumentParser((ModelArguments, DataArguments, SimPOConfig))
+    model_args, data_args, training_args = parser.parse()
 
     #######
     # Setup
