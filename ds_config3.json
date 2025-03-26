@@ -1,14 +1,21 @@
 {
+  "train_micro_batch_size_per_gpu": 1,
+  "gradient_accumulation_steps": 16,
   "fp16": {
     "enabled": true,
     "loss_scale": 0,
     "loss_scale_window": 1000,
-    "initial_scale_power": 32,
     "hysteresis": 2,
     "min_loss_scale": 1
   },
   "zero_optimization": {
     "stage": 3,
+    "overlap_comm": true,
+    "contiguous_gradients": true,
+    "reduce_bucket_size": 5e7,
+    "stage3_prefetch_bucket_size": 5e7,
+    "stage3_param_persistence_threshold": 1e5,
+    "sub_group_size": 1e9,
     "offload_optimizer": {
       "device": "cpu",
       "pin_memory": true
@@ -16,19 +23,16 @@
     "offload_param": {
       "device": "cpu",
       "pin_memory": true
-    },
-    "overlap_comm": true,
-    "contiguous_gradients": true,
-    "reduce_bucket_size": "auto",
-    "stage3_prefetch_bucket_size": "auto",
-    "stage3_param_persistence_threshold": "auto",
-    "stage3_gather_16bit_weights_on_model_save": true,
-    "sub_group_size": 1e9
+    }
   },
-  "steps_per_print": 10,
+  "gradient_clipping": 1.0,
+  "steps_per_print": 2000,
   "wall_clock_breakdown": false,
-  "train_micro_batch_size_per_gpu": 1,
-  "gradient_accumulation_steps": 16,
-  "gradient_clipping": "auto",
-  "train_batch_size": 16
+  "memory_breakdown": false,
+  "activation_checkpointing": {
+    "partition_activations": true,
+    "cpu_checkpointing": true,
+    "contiguous_memory_optimization": true,
+    "number_checkpoints": 2
+  }
 }

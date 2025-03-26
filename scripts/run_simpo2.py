@@ -146,7 +146,17 @@ def main():
     parser.add_argument(
         "--deepspeed_config", type=str, help="Path to DeepSpeed configuration file"
     )
+    parser.add_argument(
+        "--local_rank", type=int, default=-1, help="Local rank for distributed training"
+    )
     custom_args, _ = parser.parse_known_args()
+
+    # PYTORCH_CUDAのメモリ設定を改善
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
+    # 最大シーケンス長を短くして、メモリ使用量を削減
+    MAX_LENGTH = 192  # 元の設定は256
+    MAX_PROMPT_LENGTH = 96  # 元の設定は128
 
     # YAMLの設定をハードコード
     # ModelArgumentsの設定
@@ -180,14 +190,14 @@ def main():
         log_level="info",
         logging_steps=5,
         lr_scheduler_type="cosine",
-        max_length=256,
-        max_prompt_length=128,
+        max_length=MAX_LENGTH,  # 修正: シーケンス長を短く
+        max_prompt_length=MAX_PROMPT_LENGTH,  # 修正: プロンプト長を短く
         num_train_epochs=1,
         optim="adamw_torch",
         output_dir="outputs/llama-3-8b-base-simpo",
         run_name="llama-3-8b-base-simpo",
         per_device_train_batch_size=1,
-        per_device_eval_batch_size=4,
+        per_device_eval_batch_size=1,  # 修正: 評価バッチサイズを小さく
         push_to_hub=False,
         save_strategy="steps",
         save_steps=1000000,
@@ -195,6 +205,7 @@ def main():
         save_total_limit=20,
         seed=42,
         warmup_ratio=0.1,
+        remove_unused_columns=False,  # DPODataCollatorWithPaddingの警告を修正
     )
 
     # --deepspeed_configが指定されていればその値を使用し、指定がなければYAMLの値を使用
@@ -202,6 +213,10 @@ def main():
         training_args.deepspeed = custom_args.deepspeed_config
     else:
         training_args.deepspeed = "ds_config.json"
+
+    # local_rankの設定
+    if custom_args.local_rank >= 0:
+        training_args.local_rank = custom_args.local_rank
 
     #######
     # Setup
@@ -290,16 +305,17 @@ def main():
             }
         )
 
-    # Log a few random samples from the training set:
-    for index in random.sample(range(len(raw_datasets["train"])), 3):
+    # サンプルログを制限して無駄なメモリ使用を避ける
+    sample_indices = random.sample(range(min(len(raw_datasets["train"]), 100)), 1)
+    for index in sample_indices:
         logger.info(
-            f"Prompt sample {index} of the raw training set:\n\n{raw_datasets['train'][index]['prompt']}"
+            f"Prompt sample {index} of the raw training set:\n\n{raw_datasets['train'][index]['prompt'][:200]}..."
         )
         logger.info(
-            f"Chosen sample {index} of the raw training set:\n\n{raw_datasets['train'][index]['chosen']}"
+            f"Chosen sample {index} of the raw training set:\n\n{raw_datasets['train'][index]['chosen'][:200]}..."
         )
         logger.info(
-            f"Rejected sample {index} of the raw training set:\n\n{raw_datasets['train'][index]['rejected']}"
+            f"Rejected sample {index} of the raw training set:\n\n{raw_datasets['train'][index]['rejected'][:200]}..."
         )
 
     torch_dtype = (
@@ -313,38 +329,30 @@ def main():
         revision=model_args.model_revision,
         trust_remote_code=model_args.trust_remote_code,
         torch_dtype=torch_dtype,
-        use_cache=False if training_args.gradient_checkpointing else True,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
+        use_cache=False,  # 常にキャッシュを無効化
+        device_map=(
+            "auto" if custom_args.local_rank < 0 else {"": custom_args.local_rank}
+        ),
         quantization_config=quantization_config,
         attn_implementation=model_args.attn_implementation,
     )
 
     model = model_args.model_name_or_path
-    # seems to require internet
-    # if is_adapter_model(model, model_args.model_revision) is True:
-    #     logger.info(f"Loading SFT adapter for {model_args.model_name_or_path=}")
-    #     peft_config = PeftConfig.from_pretrained(model_args.model_name_or_path, revision=model_args.model_revision)
-    #     model_kwargs = dict(
-    #         revision=model_args.base_model_revision,
-    #         trust_remote_code=model_args.trust_remote_code,
-    #         use_flash_attention_2=model_args.use_flash_attention_2,
-    #         torch_dtype=torch_dtype,
-    #         use_cache=False if training_args.gradient_checkpointing else True,
-    #         device_map=get_kbit_device_map() if quantization_config is not None else None,
-    #         quantization_config=quantization_config,
-    #     )
-    #     base_model = AutoModelForCausalLM.from_pretrained(
-    #         peft_config.base_model_name_or_path,
-    #         **model_kwargs,
-    #     )
-    #     model = PeftModel.from_pretrained(
-    #         base_model,
-    #         model_args.model_name_or_path,
-    #         revision=model_args.model_revision,
-    #     )
-    #     model_kwargs = None
-
     training_args.model_init_kwargs = model_kwargs
+
+    # メモリ使用量を減らすためのデータセット制限（必要に応じて）
+    # トレーニングデータセットを制限
+    max_train_samples = 10000  # 例えば10000サンプルに制限
+    if len(raw_datasets["train"]) > max_train_samples:
+        raw_datasets["train"] = raw_datasets["train"].select(range(max_train_samples))
+        logger.info(f"Training dataset limited to {max_train_samples} samples")
+
+    # テストデータセットを制限
+    max_eval_samples = 1000  # 例えば1000サンプルに制限
+    if len(raw_datasets["test"]) > max_eval_samples:
+        raw_datasets["test"] = raw_datasets["test"].select(range(max_eval_samples))
+        logger.info(f"Evaluation dataset limited to {max_eval_samples} samples")
+
     #########################
     # Instantiate SimPO trainer
     #########################
@@ -357,13 +365,7 @@ def main():
         peft_config=get_peft_config(model_args),
     )
 
-    # トレーナーのモデルを明示的にGPU（cuda:0）に移動
-    # DeepSpeedの場合、local_rankの値によって適切に処理される
-    local_rank = int(os.environ.get("LOCAL_RANK", -1))
-    if local_rank <= 0:  # マスターランクまたは非分散モードの場合のみ
-        trainer.model = trainer.model.to("cuda:0")
-
-    # 不要なGPUキャッシュをクリアする
+    # キャッシュをクリア
     torch.cuda.empty_cache()
 
     ###############
@@ -374,50 +376,62 @@ def main():
         checkpoint = training_args.resume_from_checkpoint
     elif last_checkpoint is not None:
         checkpoint = last_checkpoint
-    train_result = trainer.train(resume_from_checkpoint=checkpoint)
-    metrics = train_result.metrics
-    metrics["train_samples"] = len(raw_datasets["train"])
-    trainer.log_metrics("train", metrics)
-    trainer.save_metrics("train", metrics)
-    trainer.save_state()
 
-    logger.info("*** Training complete ***")
+    try:
+        train_result = trainer.train(resume_from_checkpoint=checkpoint)
+        metrics = train_result.metrics
+        metrics["train_samples"] = len(raw_datasets["train"])
+        trainer.log_metrics("train", metrics)
+        trainer.save_metrics("train", metrics)
+        trainer.save_state()
 
-    ##################################
-    # Save model and create model card
-    ##################################
-    logger.info("*** Save model ***")
-    trainer.save_model(training_args.output_dir)
-    logger.info(f"Model saved to {training_args.output_dir}")
+        logger.info("*** Training complete ***")
 
-    # Save everything else on main process
-    kwargs = {
-        "finetuned_from": model_args.model_name_or_path,
-        "dataset": list(data_args.dataset_mixer.keys()),
-        "dataset_tags": list(data_args.dataset_mixer.keys()),
-        "tags": ["alignment-handbook"],
-    }
-    if trainer.accelerator.is_main_process:
-        trainer.create_model_card(**kwargs)
-        # Restore k,v cache for fast inference
-        trainer.model.config.use_cache = True
-        trainer.model.config.save_pretrained(training_args.output_dir)
+        ##################################
+        # Save model and create model card
+        ##################################
+        logger.info("*** Save model ***")
+        trainer.save_model(training_args.output_dir)
+        logger.info(f"Model saved to {training_args.output_dir}")
 
-    ##########
-    # Evaluate
-    ##########
-    if training_args.do_eval:
-        logger.info("*** Evaluate ***")
-        metrics = trainer.evaluate()
-        metrics["eval_samples"] = len(raw_datasets["test"])
-        trainer.log_metrics("eval", metrics)
-        trainer.save_metrics("eval", metrics)
+        # Save everything else on main process
+        kwargs = {
+            "finetuned_from": model_args.model_name_or_path,
+            "dataset": list(data_args.dataset_mixer.keys()),
+            "dataset_tags": list(data_args.dataset_mixer.keys()),
+            "tags": ["alignment-handbook"],
+        }
+        if trainer.accelerator.is_main_process:
+            trainer.create_model_card(**kwargs)
+            # Restore k,v cache for fast inference
+            trainer.model.config.use_cache = True
+            trainer.model.config.save_pretrained(training_args.output_dir)
 
-    if training_args.push_to_hub is True:
-        logger.info("Pushing to hub...")
-        trainer.push_to_hub(**kwargs)
+        ##########
+        # Evaluate
+        ##########
+        if training_args.do_eval:
+            logger.info("*** Evaluate ***")
+            metrics = trainer.evaluate()
+            metrics["eval_samples"] = len(raw_datasets["test"])
+            trainer.log_metrics("eval", metrics)
+            trainer.save_metrics("eval", metrics)
 
-    logger.info("*** Training complete! ***")
+        if training_args.push_to_hub is True:
+            logger.info("Pushing to hub...")
+            trainer.push_to_hub(**kwargs)
+
+        logger.info("*** Training complete! ***")
+    except Exception as e:
+        logger.error(f"Training failed with error: {e}")
+        # エラーが発生した場合でも可能な限りモデルを保存
+        try:
+            if trainer.accelerator.is_main_process:
+                logger.info("Attempting to save partial model...")
+                trainer.save_model(training_args.output_dir + "_partial")
+        except:
+            logger.error("Failed to save partial model")
+        raise e
 
 
 if __name__ == "__main__":
