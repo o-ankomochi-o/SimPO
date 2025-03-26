@@ -10,17 +10,12 @@
       "pin_memory": true
     },
     "overlap_comm": true,
-    "contiguous_gradients": true,
-    "reduce_bucket_size": 5e7,
-    "stage3_prefetch_bucket_size": 5e7,
-    "stage3_param_persistence_threshold": 1e5
+    "contiguous_gradients": true
   },
   "bf16": {
     "enabled": true
   },
-  "train_batch_size": 32,
-  "train_micro_batch_size_per_gpu": 1,
-  "gradient_accumulation_steps": 8,
-  "gradient_clipping": 1.0,
-  "wall_clock_breakdown": false
+  "train_batch_size": "auto",
+  "train_micro_batch_size_per_gpu": "auto",
+  "gradient_accumulation_steps": "auto"
 }
