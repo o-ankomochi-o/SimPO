@@ -7,8 +7,8 @@ attn_implementation: flash_attention_2
 dataset_mixer:
   princeton-nlp/llama3-ultrafeedback: 1.0
 dataset_splits:
-- train
-- test
+  - train
+  - test
 preprocessing_num_workers: 12
 
 # SimPOTrainer arguments
@@ -18,7 +18,7 @@ gamma_beta_ratio: 0.55
 do_eval: true
 evaluation_strategy: steps
 eval_steps: 400
-gradient_accumulation_steps: 16 
+gradient_accumulation_steps: 1
 gradient_checkpointing: true
 gradient_checkpointing_kwargs:
   use_reentrant: False
@@ -33,13 +33,13 @@ num_train_epochs: 1
 optim: adamw_torch
 output_dir: outputs/llama-3-8b-instruct-simpo
 run_name: llama-3-8b-instruct-simpo
-per_device_train_batch_size: 2
+per_device_train_batch_size: 1
 per_device_eval_batch_size: 4
 push_to_hub: false
 save_strategy: "steps"
 save_steps: 1000000
 report_to:
-- wandb
+  - wandb
 save_total_limit: 20
 seed: 42
 warmup_ratio: 0.1
